@@ -59,17 +59,18 @@ func resourceDnsRecordCreate(d *schema.ResourceData, m interface{}) error {
 	name := d.Get("name").(string)
 	record := d.Get("record").(string)
 	recordType := d.Get("type").(string)
-	priority := 0
 
 	// Если тип записи требует приоритета (например, MX), считываем его
+	var priorityPtr *int
 	if recordType == "MX" || recordType == "NS" {
 		if v, ok := d.GetOk("priority"); ok {
-			priority = v.(int)
+			priority := v.(int)
+			priorityPtr = &priority
 		}
 	}
 
 	// Вызов AddRecord с новыми параметрами
-	_, err := c.AddRecord(recordType, zone, name, record, priority)
+	_, err := c.AddRecord(recordType, zone, name, record, priorityPtr)
 	if err != nil {
 		return fmt.Errorf("failed to create DNS record: %w", err)
 	}
@@ -94,10 +95,11 @@ func resourceDnsRecordDelete(d *schema.ResourceData, m interface{}) error {
 	log.Printf("[DEBUG] Deleting DNS record: zone=%s, name=%s, type=%s, record=%s", zone, name, recordType, record)
 
 	// Добавляем проверку для MX и NS записей, чтобы учесть приоритет
-	priority := 0
+	var priorityPtr *int
 	if recordType == "MX" || recordType == "NS" {
 		if v, ok := d.GetOk("priority"); ok {
-			priority = v.(int)
+			priority := v.(int)
+			priorityPtr = &priority
 		}
 	}
 
@@ -107,7 +109,7 @@ func resourceDnsRecordDelete(d *schema.ResourceData, m interface{}) error {
 	}
 
 	// Попытка удалить запись
-	_, err := c.RemoveRecord(zone, name, recordType, record, priority)
+	_, err := c.RemoveRecord(zone, name, recordType, record, priorityPtr)
 	if err != nil {
 		// Если ошибка "RR_NOT_FOUND", то игнорируем её, т.к. запись может быть уже удалена
 		if err.Error() == "RR_NOT_FOUND" {

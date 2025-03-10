@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,14 @@ type Client struct {
 	Username string
 	Password string
 	BaseURL  string
+}
+
+// APIError описывает ошибку, возвращаемую API
+type APIError struct {
+	ErrorCode   string            `json:"error_code"`
+	ErrorText   string            `json:"error_text"`
+	ErrorParams map[string]string `json:"error_params"`
+	Result      string            `json:"result"`
 }
 
 // NewClient создает новый экземпляр клиента
@@ -53,10 +62,18 @@ func (c *Client) doRequest(endpoint string, params url.Values) ([]byte, error) {
 
 	log.Printf("[DEBUG] Response body: %s", string(body))
 
+	// Проверяем JSON на наличие ошибки
+	var apiResp APIError
+	if err := json.Unmarshal(body, &apiResp); err == nil {
+		if apiResp.Result == "error" {
+			return nil, fmt.Errorf("API error: %s (%s)", apiResp.ErrorText, apiResp.ErrorCode)
+		}
+	}
+
 	return body, nil
 }
 
-func (c *Client) AddRecord(recordType, domainName, subdomain, value string, priority int) ([]byte, error) {
+func (c *Client) AddRecord(recordType, domainName, subdomain, value string, priority *int) ([]byte, error) {
 	// Параметры для запроса
 	params := url.Values{}
 	params.Add("domain_name", domainName)
@@ -79,11 +96,15 @@ func (c *Client) AddRecord(recordType, domainName, subdomain, value string, prio
 	case "MX":
 		endpoint = "zone/add_mx"
 		params.Add("mail_server", value)
-		params.Add("priority", fmt.Sprintf("%d", priority)) // Преобразование приоритета в строку
+		if priority != nil {
+			params.Add("priority", fmt.Sprintf("%d", *priority)) // Преобразование приоритета в строку
+		}
 	case "NS":
 		endpoint = "zone/add_ns"
 		params.Add("dns_server", value)
-		params.Add("priority", fmt.Sprintf("%d", priority))
+		if priority != nil {
+			params.Add("priority", fmt.Sprintf("%d", *priority))
+		}
 	case "TXT":
 		endpoint = "zone/add_txt"
 		params.Add("text", value)
@@ -98,7 +119,7 @@ func (c *Client) AddRecord(recordType, domainName, subdomain, value string, prio
 }
 
 // RemoveRecord удаляет запись
-func (c *Client) RemoveRecord(domainName, subdomain, recordType, content string, priority int) ([]byte, error) {
+func (c *Client) RemoveRecord(domainName, subdomain, recordType, content string, priority *int) ([]byte, error) {
 	params := url.Values{}
 	params.Add("domain_name", domainName)
 	params.Add("subdomain", subdomain)
@@ -107,8 +128,8 @@ func (c *Client) RemoveRecord(domainName, subdomain, recordType, content string,
 	params.Add("output_content_type", "plain")
 
 	// Добавляем приоритет для MX и NS записей
-	if recordType == "MX" || recordType == "NS" {
-		params.Add("priority", fmt.Sprintf("%d", priority))
+	if (recordType == "MX" || recordType == "NS") && priority != nil {
+		params.Add("priority", fmt.Sprintf("%d", *priority))
 	}
 
 	return c.doRequest("zone/remove_record", params)

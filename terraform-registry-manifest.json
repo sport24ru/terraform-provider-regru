@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "metadata": {
+    "protocol_versions": ["5.0"],
+    "podcast": false,
+    "podcast_bytes": 0,
+    "podcast_duration": 0,
+    "tfe": "2.3.0"
+  },
+  "lifecycle": {
+    "ignore_changes": [
+      "metadata"
+    ]
+  }
+} 

@@ -16,12 +16,25 @@ type Client struct {
 	BaseURL  string
 }
 
-// APIError описывает ошибку, возвращаемую API
+// APIError represents the error response structure
 type APIError struct {
 	ErrorCode   string            `json:"error_code"`
 	ErrorText   string            `json:"error_text"`
 	ErrorParams map[string]string `json:"error_params"`
 	Result      string            `json:"result"`
+}
+
+// APIResponse represents the full API response structure
+type APIResponse struct {
+	Answer struct {
+		Domains []struct {
+			ErrorCode   string            `json:"error_code"`
+			ErrorText   string            `json:"error_text"`
+			ErrorParams map[string]string `json:"error_params"`
+			Result      string            `json:"result"`
+		} `json:"domains"`
+	} `json:"answer"`
+	Result string `json:"result"`
 }
 
 // NewClient создает новый экземпляр клиента
@@ -30,6 +43,38 @@ func NewClient(username, password string) *Client {
 		Username: username,
 		Password: password,
 		BaseURL:  "https://api.reg.ru/api/regru2",
+	}
+}
+
+// formatHumanReadableError creates user-friendly error messages for common API errors
+func formatHumanReadableError(errorCode, errorText string, errorParams map[string]string) error {
+	// Handle specific error codes with user-friendly messages
+	switch errorCode {
+	case "ACCESS_DENIED_FROM_IP":
+		return fmt.Errorf("Access denied: Your IP address is not authorized to access the Reg.ru API. Please contact Reg.ru support to whitelist your IP address or check your account settings.")
+	case "IP_EXCEEDED_ALLOWED_CONNECTION_RATE":
+		return fmt.Errorf("Rate limit exceeded: Your IP address has exceeded the allowed connection rate to the Reg.ru API. Please wait a few minutes before making additional requests or contact Reg.ru support if this persists.")
+	case "INVALID_USERNAME_OR_PASSWORD":
+		return fmt.Errorf("Authentication failed: Invalid username or password. Please check your Reg.ru API credentials.")
+	case "DOMAIN_NOT_FOUND":
+		return fmt.Errorf("Domain not found: The specified domain does not exist in your account or you don't have access to it.")
+	case "RECORD_NOT_FOUND":
+		return fmt.Errorf("DNS record not found: The specified DNS record does not exist.")
+	case "INVALID_RECORD_TYPE":
+		return fmt.Errorf("Invalid record type: The specified DNS record type is not supported or invalid.")
+	case "DUPLICATE_RECORD":
+		return fmt.Errorf("Duplicate record: A DNS record with the same name and type already exists.")
+	case "INVALID_IP_ADDRESS":
+		return fmt.Errorf("Invalid IP address: The provided IP address format is incorrect.")
+	case "RATE_LIMIT_EXCEEDED":
+		return fmt.Errorf("Rate limit exceeded: Too many API requests. Please wait before making additional requests.")
+	default:
+		// For unknown error codes, provide a detailed error message
+		errorMsg := fmt.Sprintf("API Error: %s (Code: %s)", errorText, errorCode)
+		if len(errorParams) > 0 {
+			errorMsg += fmt.Sprintf(" - Additional info: %v", errorParams)
+		}
+		return fmt.Errorf(errorMsg)
 	}
 }
 
@@ -63,10 +108,34 @@ func (c *Client) doRequest(endpoint string, params url.Values) ([]byte, error) {
 	log.Printf("[DEBUG] Response body: %s", string(body))
 
 	// Проверяем JSON на наличие ошибки
-	var apiResp APIError
+	// First, try to parse as a direct error response (like ACCESS_DENIED_FROM_IP)
+	var directError APIError
+	if err := json.Unmarshal(body, &directError); err == nil {
+		if directError.Result == "error" {
+			return nil, formatHumanReadableError(directError.ErrorCode, directError.ErrorText, directError.ErrorParams)
+		}
+	}
+
+	// If not a direct error, try to parse as APIResponse
+	var apiResp APIResponse
 	if err := json.Unmarshal(body, &apiResp); err == nil {
+		// Check if the overall result is error
 		if apiResp.Result == "error" {
-			return nil, fmt.Errorf("API error: %s (%s)", apiResp.ErrorText, apiResp.ErrorCode)
+			// Try to get more specific error information from the response
+			if len(apiResp.Answer.Domains) > 0 {
+				domain := apiResp.Answer.Domains[0]
+				if domain.ErrorCode != "" {
+					return nil, formatHumanReadableError(domain.ErrorCode, domain.ErrorText, domain.ErrorParams)
+				}
+			}
+			return nil, fmt.Errorf("API error: overall result is error")
+		}
+
+		// Check if any domain has an error
+		for _, domain := range apiResp.Answer.Domains {
+			if domain.Result == "error" {
+				return nil, formatHumanReadableError(domain.ErrorCode, domain.ErrorText, domain.ErrorParams)
+			}
 		}
 	}
 
@@ -105,6 +174,19 @@ func (c *Client) AddRecord(recordType, domainName, subdomain, value string, prio
 		if priority != nil {
 			params.Add("priority", fmt.Sprintf("%d", *priority))
 		}
+	case "SRV":
+		endpoint = "zone/add_srv"
+		params.Add("target", value)
+		if priority != nil {
+			params.Add("priority", fmt.Sprintf("%d", *priority))
+		}
+		// Note: Weight and port will need to be added separately
+		// as the current function signature doesn't support them
+	case "CAA":
+		endpoint = "zone/add_caa"
+		params.Add("value", value)
+		// Note: Flag and tag will need to be added separately
+		// as the current function signature doesn't support them
 	case "TXT":
 		endpoint = "zone/add_txt"
 		params.Add("text", value)
@@ -118,6 +200,114 @@ func (c *Client) AddRecord(recordType, domainName, subdomain, value string, prio
 	return c.doRequest(endpoint, params)
 }
 
+// AddSRVRecord adds an SRV record with priority, weight, and port
+func (c *Client) AddSRVRecord(domainName, subdomain, target string, priority, weight, port *int) ([]byte, error) {
+	params := url.Values{}
+	params.Add("domain_name", domainName)
+	params.Add("subdomain", subdomain)
+	params.Add("output_content_type", "plain")
+	params.Add("target", target)
+
+	if priority != nil {
+		params.Add("priority", fmt.Sprintf("%d", *priority))
+	}
+	if weight != nil {
+		params.Add("weight", fmt.Sprintf("%d", *weight))
+	}
+	if port != nil {
+		params.Add("port", fmt.Sprintf("%d", *port))
+	}
+
+	return c.doRequest("zone/add_srv", params)
+}
+
+// AddCAARecord adds a CAA record with flag and tag
+func (c *Client) AddCAARecord(domainName, subdomain, value string, flag *int, tag *string) ([]byte, error) {
+	params := url.Values{}
+	params.Add("domain_name", domainName)
+	params.Add("subdomain", subdomain)
+	params.Add("output_content_type", "plain")
+	params.Add("value", value)
+
+	log.Printf("[DEBUG] AddCAARecord called with flag=%v, tag=%v", flag, tag)
+
+	// Always send flags parameter - API requires it
+	if flag != nil {
+		params.Add("flags", fmt.Sprintf("%d", *flag))
+		log.Printf("[DEBUG] Added flags parameter: %d", *flag)
+	} else {
+		// Default to 0 if not specified
+		params.Add("flags", "0")
+		log.Printf("[DEBUG] Added default flags parameter: 0")
+	}
+
+	// Always send tag parameter - API requires it
+	if tag != nil {
+		params.Add("tag", *tag)
+		log.Printf("[DEBUG] Added tag parameter: %s", *tag)
+	} else {
+		// Default to "issue" if not specified
+		params.Add("tag", "issue")
+		log.Printf("[DEBUG] Added default tag parameter: issue")
+	}
+
+	log.Printf("[DEBUG] Final parameters: %v", params)
+
+	return c.doRequest("zone/add_caa", params)
+}
+
+// RemoveCAARecord removes a CAA record with flag and tag
+func (c *Client) RemoveCAARecord(domainName, subdomain, value string, flag *int, tag *string) ([]byte, error) {
+	params := url.Values{}
+	params.Add("domain_name", domainName)
+	params.Add("subdomain", subdomain)
+	params.Add("output_content_type", "plain")
+	params.Add("record_type", "CAA")
+	params.Add("content", value)
+
+	// Always send flags parameter - API requires it
+	if flag != nil {
+		params.Add("flags", fmt.Sprintf("%d", *flag))
+	} else {
+		// Default to 0 if not specified
+		params.Add("flags", "0")
+	}
+
+	// Always send tag parameter - API requires it
+	if tag != nil {
+		params.Add("tag", *tag)
+	} else {
+		// Default to "issue" if not specified
+		params.Add("tag", "issue")
+	}
+
+	// Use the generic remove_record endpoint
+	return c.doRequest("zone/remove_record", params)
+}
+
+// RemoveSRVRecord removes an SRV record with priority, weight, and port
+func (c *Client) RemoveSRVRecord(domainName, subdomain, target string, priority, weight, port *int) ([]byte, error) {
+	params := url.Values{}
+	params.Add("domain_name", domainName)
+	params.Add("subdomain", subdomain)
+	params.Add("output_content_type", "plain")
+	params.Add("record_type", "SRV")
+	params.Add("content", target)
+
+	if priority != nil {
+		params.Add("priority", fmt.Sprintf("%d", *priority))
+	}
+	if weight != nil {
+		params.Add("weight", fmt.Sprintf("%d", *weight))
+	}
+	if port != nil {
+		params.Add("port", fmt.Sprintf("%d", *port))
+	}
+
+	// Use the generic remove_record endpoint instead of remove_srv
+	return c.doRequest("zone/remove_record", params)
+}
+
 // RemoveRecord удаляет запись
 func (c *Client) RemoveRecord(domainName, subdomain, recordType, content string, priority *int) ([]byte, error) {
 	params := url.Values{}
@@ -127,8 +317,8 @@ func (c *Client) RemoveRecord(domainName, subdomain, recordType, content string,
 	params.Add("content", content)
 	params.Add("output_content_type", "plain")
 
-	// Добавляем приоритет для MX и NS записей
-	if (recordType == "MX" || recordType == "NS") && priority != nil {
+	// Добавляем приоритет для MX, NS и SRV записей
+	if (recordType == "MX" || recordType == "NS" || recordType == "SRV") && priority != nil {
 		params.Add("priority", fmt.Sprintf("%d", *priority))
 	}
 

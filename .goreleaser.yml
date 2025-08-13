@@ -3,9 +3,12 @@ version: 2
 before:
   hooks:
     - go mod tidy
+
 builds:
   - env:
       - CGO_ENABLED=0
+      - GOOS={{ .Os }}
+      - GOARCH={{ .Arch }}
     goos:
       - freebsd
       - windows
@@ -19,13 +22,22 @@ builds:
     ignore:
       - goos: darwin
         goarch: '386'
-    binary: '{{ .ProjectName }}_v{{ .Version }}'
+      - goos: windows
+        goarch: '386'
+    binary: '{{ .ProjectName }}'
+    ldflags:
+      - -s -w
+      - -X github.com/sport24ru/terraform-provider-regru/version.Version={{ .Version }}
+      - -X github.com/sport24ru/terraform-provider-regru/version.Commit={{ .Commit }}
+      - -X github.com/sport24ru/terraform-provider-regru/version.Date={{ .Date }}
+
 archives:
-  - formats: [ 'zip' ]
-    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+  - name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
 checksum:
   name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
   algorithm: sha256
+
 signs:
   - artifacts: checksum
     args:
@@ -35,6 +47,18 @@ signs:
       - "${signature}"
       - "--detach-sign"
       - "${artifact}"
+
+# Terraform Registry Configuration
+# Note: This will be handled by the release extra_files
+
 release:
-  # Visit your project's GitHub Releases page to publish this release.
   draft: true
+  prerelease: false
+  # Include all documentation
+  extra_files:
+    - glob: README.md
+    - glob: docs/**/*
+    - glob: LICENSE
+    - glob: terraform-registry-manifest.json
+  # Release notes template
+  name_template: 'v{{ .Version }}'

@@ -15,3 +15,5 @@ terraform-provider-regru
 # are not checked in
 override.tf
 override.tf.json
+
+dist/

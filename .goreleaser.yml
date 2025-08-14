@@ -51,17 +51,11 @@ signs:
       - "--detach-sign"
       - "${artifact}"
 
-# Terraform Registry Configuration
-# Note: This will be handled by the release extra_files
-
 release:
   draft: true
   prerelease: false
   # Include all documentation
   extra_files:
-    - glob: README.md
-    - glob: docs/**/*
-    - glob: LICENSE
     - glob: terraform-registry-manifest.json
   # Release notes template
   name_template: 'v{{ .Version }}'
